@@ -18,6 +18,17 @@ def get_latest_cycle():
         cycle -= timedelta(hours=6)
     return cycle
 
+def get_or_create_cycle(cycle_dt):
+    """Insert cycle into turbulence_cycles, return its UUID."""
+    cycle_str = cycle_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    res = supabase.table("turbulence_cycles").upsert(
+        {"cycle_issued_utc": cycle_str},
+        on_conflict="cycle_issued_utc"
+    ).execute()
+    cycle_id = res.data[0]["id"]
+    print(f"  Cycle ID: {cycle_id}")
+    return cycle_id
+
 def download_grib(cycle_dt, offset_hours):
     date_str = cycle_dt.strftime("%Y%m%d")
     hh = f"{cycle_dt.hour:02d}"
@@ -35,12 +46,11 @@ def download_grib(cycle_dt, offset_hours):
     print(f"  Saved {os.path.getsize(tmp.name)} bytes")
     return tmp.name
 
-def parse_grib(filepath, cycle_dt, offset_hours):
+def parse_grib(filepath, cycle_id, cycle_dt, offset_hours):
     import eccodes
     rows = []
     valid_dt = cycle_dt + timedelta(hours=offset_hours)
     valid_str = valid_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    cycle_str = cycle_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     with open(filepath, "rb") as f:
         while True:
             msgid = eccodes.codes_grib_new_from_file(f)
@@ -73,7 +83,7 @@ def parse_grib(filepath, cycle_dt, offset_hours):
                         if lon > 180:
                             lon -= 360
                         rows.append({
-                            "cycle_utc": cycle_str,
+                            "cycle_id": cycle_id,
                             "valid_from_utc": valid_str,
                             "fl": fl,
                             "lat": round(lat, 4),
@@ -85,26 +95,39 @@ def parse_grib(filepath, cycle_dt, offset_hours):
     return rows
 
 def cleanup_old(cycle_dt):
+    """Delete cycles older than 12h — grid data deleted via FK cascade."""
     cutoff = (cycle_dt - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    res = supabase.table("turbulence_grid_data").delete().lt("cycle_utc", cutoff).execute()
-    print(f"Cleaned rows older than {cutoff}: {len(res.data)} removed")
+    # Get old cycle IDs
+    old = supabase.table("turbulence_cycles").select("id").lt("cycle_issued_utc", cutoff).execute()
+    if not old.data:
+        print(f"Nothing to clean (cutoff {cutoff})")
+        return
+    old_ids = [r["id"] for r in old.data]
+    # Delete grid data first (in case no CASCADE)
+    supabase.table("turbulence_grid_data").delete().in_("cycle_id", old_ids).execute()
+    # Delete cycles
+    supabase.table("turbulence_cycles").delete().in_("id", old_ids).execute()
+    print(f"Cleaned {len(old_ids)} old cycles (older than {cutoff})")
 
 def upsert_batch(rows):
     BATCH = 1000
+    total = 0
     for i in range(0, len(rows), BATCH):
-        supabase.table("turbulence_grid_data").upsert(rows[i:i+BATCH]).execute()
+        res = supabase.table("turbulence_grid_data").upsert(rows[i:i+BATCH]).execute()
+        total += len(res.data) if res.data else BATCH
     print(f"  Upserted {len(rows)} rows")
 
 def ingest():
     cycle = get_latest_cycle()
     print(f"=== Cycle: {cycle.isoformat()} ===")
+    cycle_id = get_or_create_cycle(cycle)
     cleanup_old(cycle)
     for offset in range(6, 37, 3):
         filepath = download_grib(cycle, offset)
         if not filepath:
             continue
         try:
-            rows = parse_grib(filepath, cycle, offset)
+            rows = parse_grib(filepath, cycle_id, cycle, offset)
             print(f"  Parsed {len(rows)} turbulence points for f{offset:03d}")
             if rows:
                 upsert_batch(rows)
