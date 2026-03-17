@@ -19,14 +19,18 @@ def get_latest_cycle():
     return cycle
 
 def get_or_create_cycle(cycle_dt):
-    """Insert cycle into turbulence_cycles, return its UUID."""
+    """Get or create cycle in turbulence_cycles, return its UUID."""
     cycle_str = cycle_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    res = supabase.table("turbulence_cycles").upsert(
-        {"cycle_issued_utc": cycle_str},
-        on_conflict="cycle_issued_utc"
-    ).execute()
+    # Try to find existing cycle first
+    res = supabase.table("turbulence_cycles").select("id").eq("cycle_issued_utc", cycle_str).execute()
+    if res.data:
+        cycle_id = res.data[0]["id"]
+        print(f"  Found existing cycle: {cycle_id}")
+        return cycle_id
+    # Insert new cycle
+    res = supabase.table("turbulence_cycles").insert({"cycle_issued_utc": cycle_str}).execute()
     cycle_id = res.data[0]["id"]
-    print(f"  Cycle ID: {cycle_id}")
+    print(f"  Created new cycle: {cycle_id}")
     return cycle_id
 
 def download_grib(cycle_dt, offset_hours):
