@@ -10,6 +10,9 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 WIFS_BASE = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod"
 
+# Only these flight levels are needed (commercial cruise altitudes)
+ALLOWED_FL = {270, 330, 360, 390, 420}
+
 def get_latest_cycle():
     now = datetime.now(timezone.utc)
     cycle_hour = (now.hour // 6) * 6
@@ -66,7 +69,7 @@ def parse_grib(filepath, cycle_id, cycle_dt, offset_hours):
                     continue
                 level_pa = eccodes.codes_get(msgid, "level")
                 fl = level_pa // 100
-                if fl < 100 or fl > 500:
+                if fl not in ALLOWED_FL:
                     continue
                 ni = eccodes.codes_get(msgid, "Ni")
                 nj = eccodes.codes_get(msgid, "Nj")
