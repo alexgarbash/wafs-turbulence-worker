@@ -8,10 +8,19 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-WIFS_BASE = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod"
+WIFS_API_BASE = "https://aviationweather.gov/wifs/api"
+WIFS_API_KEY = os.environ["WIFS_API_KEY"]
+WIFS_COLLECTION = "kwbc_wafshzds_blended_turb_0p25"
 
 # Only these flight levels are needed (commercial cruise altitudes)
 ALLOWED_FL = {270, 330, 360, 390, 420}
+
+# 3-hour forecast blocks available from WIFS
+FORECAST_BLOCKS = [
+    "006-008", "009-011", "012-014", "015-017",
+    "018-020", "021-023", "024-026", "027-029",
+    "030-032", "033-035", "036-038",
+]
 
 def get_latest_cycle():
     now = datetime.now(timezone.utc)
@@ -36,13 +45,18 @@ def get_or_create_cycle(cycle_dt):
     print(f"  Created new cycle: {cycle_id}")
     return cycle_id
 
-def download_grib(cycle_dt, offset_hours):
-    date_str = cycle_dt.strftime("%Y%m%d")
-    hh = f"{cycle_dt.hour:02d}"
-    fname = f"gfs.t{hh}z.awf_0p25.f{offset_hours:03d}.grib2"
-    url = f"{WIFS_BASE}/gfs.{date_str}/{hh}/atmos/{fname}"
+def download_grib(block):
+    """Download a GRIB2 file from WIFS API for a forecast hour block."""
+    item_id = f"YLDYG{block}FLALL"
+    url = f"{WIFS_API_BASE}/collections/{WIFS_COLLECTION}/items/{item_id}"
     print(f"Downloading {url}")
-    resp = requests.get(url, timeout=180, stream=True)
+    resp = requests.get(
+        url,
+        headers={"X-API-Key": WIFS_API_KEY},
+        params={"f": "grib2"},
+        timeout=180,
+        stream=True,
+    )
     if resp.status_code != 200:
         print(f"  HTTP {resp.status_code}, skipping")
         return None
@@ -53,11 +67,9 @@ def download_grib(cycle_dt, offset_hours):
     print(f"  Saved {os.path.getsize(tmp.name)} bytes")
     return tmp.name
 
-def parse_grib(filepath, cycle_id, cycle_dt, offset_hours):
+def parse_grib(filepath, cycle_id, cycle_dt):
     import eccodes
     rows = []
-    valid_dt = cycle_dt + timedelta(hours=offset_hours)
-    valid_str = valid_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     with open(filepath, "rb") as f:
         while True:
             msgid = eccodes.codes_grib_new_from_file(f)
@@ -71,6 +83,9 @@ def parse_grib(filepath, cycle_id, cycle_dt, offset_hours):
                 fl = level_pa // 100
                 if fl not in ALLOWED_FL:
                     continue
+                step = eccodes.codes_get(msgid, "forecastTime")
+                valid_dt = cycle_dt + timedelta(hours=step)
+                valid_str = valid_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 ni = eccodes.codes_get(msgid, "Ni")
                 nj = eccodes.codes_get(msgid, "Nj")
                 lat1 = eccodes.codes_get(msgid, "latitudeOfFirstGridPointInDegrees")
@@ -129,13 +144,13 @@ def ingest():
     print(f"=== Cycle: {cycle.isoformat()} ===")
     cycle_id = get_or_create_cycle(cycle)
     cleanup_old(cycle)
-    for offset in range(6, 37, 3):
-        filepath = download_grib(cycle, offset)
+    for block in FORECAST_BLOCKS:
+        filepath = download_grib(block)
         if not filepath:
             continue
         try:
-            rows = parse_grib(filepath, cycle_id, cycle, offset)
-            print(f"  Parsed {len(rows)} turbulence points for f{offset:03d}")
+            rows = parse_grib(filepath, cycle_id, cycle)
+            print(f"  Parsed {len(rows)} turbulence points for f{block}")
             if rows:
                 upsert_batch(rows)
         finally:
