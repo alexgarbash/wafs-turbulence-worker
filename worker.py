@@ -39,7 +39,7 @@ def get_or_create_cycle(cycle_dt):
 def download_grib(cycle_dt, offset_hours):
     date_str = cycle_dt.strftime("%Y%m%d")
     hh = f"{cycle_dt.hour:02d}"
-    fname = f"WAFS_blended_{date_str}{hh}f{offset_hours:03d}.grib2"
+    fname = f"gfs.t{hh}z.awf_0p25.f{offset_hours:03d}.grib2"
     url = f"{WIFS_BASE}/gfs.{date_str}/{hh}/atmos/{fname}"
     print(f"Downloading {url}")
     resp = requests.get(url, timeout=180, stream=True)
