@@ -143,7 +143,7 @@ def ingest():
     cycle = get_latest_cycle()
     print(f"=== Cycle: {cycle.isoformat()} ===")
     cycle_id = get_or_create_cycle(cycle)
-    cleanup_old(cycle)
+    total_ingested = 0
     for block in FORECAST_BLOCKS:
         filepath = download_grib(block)
         if not filepath:
@@ -153,9 +153,14 @@ def ingest():
             print(f"  Parsed {len(rows)} turbulence points for f{block}")
             if rows:
                 upsert_batch(rows)
+                total_ingested += len(rows)
         finally:
             os.unlink(filepath)
-    print("=== Done ===")
+    if total_ingested > 0:
+        cleanup_old(cycle)
+        print(f"=== Done: ingested {total_ingested} points, cleaned old cycles ===")
+    else:
+        print("=== No data ingested, skipping cleanup to preserve existing data ===")
 
 if __name__ == "__main__":
     ingest()
