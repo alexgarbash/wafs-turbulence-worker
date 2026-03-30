@@ -11,7 +11,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 WIFS_BASE = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod"
 
 # Only these flight levels are needed (commercial cruise altitudes)
-ALLOWED_FL = {270, 330, 360, 390, 420}
+ALLOWED_FL = {150, 270, 330, 360, 390, 420}
 
 def get_latest_cycle():
     now = datetime.now(timezone.utc)
